@@ -1,0 +1,53 @@
+import { _electron as electron, expect } from '@playwright/test';
+import path from 'node:path';
+import fs from 'node:fs/promises';
+const profile = path.resolve('.test-profile');
+const packaged = process.argv.includes('--packaged');
+const app = await electron.launch({...(packaged ? {executablePath:path.resolve('release/Fart Alert/Fart Alert.exe')} : {}),args:[...(packaged?[]:['.']),`--user-data-dir=${profile}`]});
+try {
+ const page = await app.firstWindow();
+ const errors=[]; page.on('pageerror',e=>errors.push(e.message));
+ await expect(page.getByText('DESKTOP EDITION')).toBeVisible();
+ const realIdle = await page.evaluate(()=>window.desktop.getIdleSeconds());
+ expect(typeof realIdle).toBe('number');
+ await app.evaluate(({ipcMain})=>{ globalThis.testIdle=0; ipcMain.removeHandler('idle:read'); ipcMain.handle('idle:read',()=>globalThis.testIdle); });
+ await page.evaluate(()=>{
+  window.audioEvents=[];
+  const start=AudioBufferSourceNode.prototype.start, stop=AudioBufferSourceNode.prototype.stop;
+  AudioBufferSourceNode.prototype.start=function(...args){ window.audioEvents.push({type:'start',duration:this.buffer.duration}); return start.apply(this,args); };
+  AudioBufferSourceNode.prototype.stop=function(...args){window.audioEvents.push({type:'stop'});return stop.apply(this,args);};
+ });
+ // A real, decodable two-second PCM WAV fixture.
+ const rate=8000,samples=16000, wav=Buffer.alloc(44+samples*2);
+ wav.write('RIFF');wav.writeUInt32LE(wav.length-8,4);wav.write('WAVEfmt ',8);wav.writeUInt32LE(16,16);wav.writeUInt16LE(1,20);wav.writeUInt16LE(1,22);wav.writeUInt32LE(rate,24);wav.writeUInt32LE(rate*2,28);wav.writeUInt16LE(2,32);wav.writeUInt16LE(16,34);wav.write('data',36);wav.writeUInt32LE(samples*2,40);
+ for(let i=0;i<samples;i++) wav.writeInt16LE(Math.round(Math.sin(i/rate*2*Math.PI*100)*500),44+i*2);
+ await page.getByLabel('Upload custom sounds').setInputFiles({name:'my-custom.wav',mimeType:'audio/wav',buffer:wav});
+ await expect(page.getByLabel('Enable my-custom.wav')).toHaveAttribute('aria-pressed','true');
+ await expect(page.getByText('1 custom sound active · overrides this theme')).toBeVisible();
+ await page.getByRole('button',{name:'Activate Fart Alert'}).click();
+ await page.getByRole('button',{name:'Extreme',exact:false}).click();
+ await app.evaluate(()=>{globalThis.testIdle=12;});
+ await expect.poll(()=>page.evaluate(()=>window.audioEvents.filter(x=>x.type==='start').length)).toBe(1);
+ expect(await page.evaluate(()=>window.audioEvents.find(x=>x.type==='start').duration)).toBe(2);
+ await expect(page.getByText('Oops. That was me.')).toBeVisible();
+ await expect.poll(()=>page.evaluate(()=>window.audioEvents.filter(x=>x.type==='start').length),{timeout:6000}).toBe(2);
+ await app.evaluate(()=>{globalThis.testIdle=0;});
+ await expect.poll(()=>page.evaluate(()=>window.audioEvents.filter(x=>x.type==='stop').length)).toBeGreaterThan(0);
+ await expect(page.getByText('Silence is suspicious.',{exact:true})).toBeVisible();
+ await page.getByRole('button',{name:'Pause Fart Alert'}).click();
+ await page.reload();
+ await expect(page.getByLabel('Enable my-custom.wav')).toHaveAttribute('aria-pressed','true');
+ await page.getByLabel('Enable my-custom.wav').click();
+ await expect(page.getByText('Handcrafted chaos. A different toot every time.')).toBeVisible();
+ await page.getByLabel('Sound personality').selectOption('Musical Farts');
+ await page.getByRole('button',{name:'Test sound',exact:true}).click();
+ await expect(page.getByText('Oops. That was me.')).toBeVisible();
+ await page.getByLabel('Upload custom sounds').setInputFiles({name:'broken.mp3',mimeType:'audio/mpeg',buffer:Buffer.from('invalid')});
+ await expect(page.getByRole('alert')).toContainText('Could not load broken.mp3');
+ await page.getByRole('button',{name:'Dismiss'}).click();
+ await page.getByLabel('Delete my-custom.wav').click();
+ await expect(page.getByLabel('Enable my-custom.wav')).toHaveCount(0);
+ await page.screenshot({path:'desktop-preview.png',fullPage:true});
+ expect(errors).toEqual([]);
+ console.log('PASS: desktop idle API, upload auto-enable, repeating custom idle playback, stop on return, persistence, theme fallback, preview, invalid file handling, deletion, and renderer errors.');
+} finally { await app.close(); await fs.rm(profile,{recursive:true,force:true}); }

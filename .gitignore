@@ -1,0 +1,11 @@
+node_modules/
+dist/
+release/
+*.log
+.test-profile/
+.cache/
+.tmp/
+desktop-preview.png
+.env
+.env.*
+!.env.example

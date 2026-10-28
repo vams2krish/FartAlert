@@ -1,0 +1,15 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
+const runtime = path.dirname(require('electron'));
+const destination = path.resolve('release/Fart Alert');
+await fs.mkdir(destination,{recursive:true});
+await fs.cp(runtime,destination,{recursive:true});
+const app = path.join(destination,'resources/app');
+await fs.mkdir(app,{recursive:true});
+await fs.cp('dist',path.join(app,'dist'),{recursive:true});
+await fs.cp('electron',path.join(app,'electron'),{recursive:true});
+await fs.writeFile(path.join(app,'package.json'),JSON.stringify({name:'fart-alert',productName:'Fart Alert',version:'1.0.0',main:'electron/main.cjs'}));
+await fs.rename(path.join(destination,'electron.exe'),path.join(destination,'Fart Alert.exe'));
+console.log(`Desktop app ready: ${path.join(destination,'Fart Alert.exe')}`);
